@@ -1,6 +1,6 @@
 // LangTray.cpp
 // Трей-приложение: меняет иконку по текущей раскладке клавиатуры.
-// Windows XP ... Windows 11.
+// Работает на Windows XP ... Windows 11.
 //
 // Сборка (MSVC):
 //   cl /nologo /O2 /utf-8 LangTray.cpp /DUNICODE /D_UNICODE /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib gdi32.lib advapi32.lib
@@ -25,13 +25,11 @@
 #define ARRAYSIZE(a) (sizeof(a)/sizeof((a)[0]))
 #endif
 
-// Трей/меню
+// Настройки
+static const UINT  TIMER_ID       = 1;
+static const UINT  TIMER_INTERVAL = 250; // мс — период опроса (можно уменьшить)
 static const UINT  TRAY_ICON_ID   = 1;
 static const UINT  WM_TRAYICON    = WM_APP + 1;
-
-// Одноразовый таймер-«debounce» после горячих клавиш (не опрос!)
-static const UINT  TIMER_DEBOUNCE_ID = 2;
-static const UINT  TIMER_DEBOUNCE_MS = 40;
 
 #define IDM_OPEN_ICONS 1001
 #define IDM_EXIT       1002
@@ -46,12 +44,6 @@ WCHAR     g_iconsDir[MAX_PATH] = {0};
 BOOL      g_hasIconsDir = FALSE;
 
 UINT      WM_TASKBARCREATED = 0;
-UINT      WM_SHELLHOOK      = 0;
-
-// Низкоуровневый хук клавиатуры
-HHOOK     g_hHookLL = nullptr;
-BOOL      g_pendingUpdate = FALSE;
-BOOL      g_alt = FALSE, g_ctrl = FALSE, g_shift = FALSE, g_win = FALSE;
 
 static BOOL FileExistsW_(LPCWSTR path)
 {
@@ -129,7 +121,7 @@ static HICON TryLoadInIcons(LPCWSTR leaf)
 }
 
 // Порядок поиска (пример для 1033/en-US):
-//  - 1033.ico (десятичный LANGID — основной вариант, как в паках Punto)
+//  - 1033.ico (десятичный LANGID — основной вариант)
 //  - en-US.ico, en_US.ico, en.ico (fallback)
 //  - 0409.ico (hex LANGID — fallback)
 //  - default.ico (fallback)
@@ -156,7 +148,7 @@ static HICON LoadIconForLang(LANGID lang)
         if (HICON h = TryLoadInIcons(isoOnly)) return h;
     }
 
-    // 0409.ico (hex)
+    // 0409.ico (hex fallback)
     WCHAR hexIco[32]; wsprintfW(hexIco, L"%s.ico", hex4);
     if (HICON h = TryLoadInIcons(hexIco)) return h;
 
@@ -234,61 +226,6 @@ static void UpdateIconIfChanged(LANGID newLang)
     }
 }
 
-static void ScheduleDebouncedUpdate(UINT delayMs)
-{
-    // Одноразово — без опроса
-    if (!g_pendingUpdate && g_hWnd) {
-        g_pendingUpdate = TRUE;
-        SetTimer(g_hWnd, TIMER_DEBOUNCE_ID, delayMs, nullptr);
-    }
-}
-
-static LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wParam, LPARAM lParam)
-{
-    if (code == HC_ACTION) {
-        const KBDLLHOOKSTRUCT* k = (const KBDLLHOOKSTRUCT*)lParam;
-        const DWORD vk = k->vkCode;
-        const BOOL down = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
-        const BOOL up   = (wParam == WM_KEYUP   || wParam == WM_SYSKEYUP);
-
-        // Обновляем модификаторы
-        auto setMod = [&](DWORD vkey, BOOL isDown){
-            switch (vkey) {
-                case VK_LMENU: case VK_RMENU:    g_alt   = isDown ? TRUE : (up ? (vk==vkey?FALSE:g_alt) : g_alt); break;
-                case VK_LCONTROL: case VK_RCONTROL: g_ctrl  = isDown ? TRUE : (up ? (vk==vkey?FALSE:g_ctrl) : g_ctrl); break;
-                case VK_LSHIFT: case VK_RSHIFT:  g_shift = isDown ? TRUE : (up ? (vk==vkey?FALSE:g_shift) : g_shift); break;
-                case VK_LWIN: case VK_RWIN:      g_win   = isDown ? TRUE : (up ? (vk==vkey?FALSE:g_win) : g_win); break;
-            }
-        };
-
-        // Сначала установим состояние при нажатии
-        if (down) {
-            setMod(vk, TRUE);
-        }
-
-        // Детектируем типичные хоткеи смены раскладки:
-        // Alt+Shift, Ctrl+Shift, Win+Space
-        BOOL trigger = FALSE;
-        if (down) {
-            if ((vk == VK_LSHIFT || vk == VK_RSHIFT) && (g_alt || g_ctrl)) trigger = TRUE;
-            if ((vk == VK_LMENU  || vk == VK_RMENU)  && g_shift)           trigger = TRUE;
-            if ((vk == VK_LCONTROL || vk == VK_RCONTROL) && g_shift)       trigger = TRUE;
-            if (vk == VK_SPACE && g_win)                                   trigger = TRUE;
-        }
-
-        // Планируем одноразовое обновление (после применения раскладки системой)
-        if (trigger) {
-            ScheduleDebouncedUpdate(TIMER_DEBOUNCE_MS);
-        }
-
-        // Обновим состояние при отпускании
-        if (up) {
-            setMod(vk, FALSE);
-        }
-    }
-    return CallNextHookEx(g_hHookLL, code, wParam, lParam);
-}
-
 static void ShowTrayMenu()
 {
     POINT pt; GetCursorPos(&pt);
@@ -321,43 +258,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return 0;
     }
 
-    if (msg == WM_SHELLHOOK) {
-        // Реагируем на активацию окна и (если ОС пошлёт) — на смену языка
-        if (wParam == HSHELL_WINDOWACTIVATED
-#ifdef HSHELL_RUDEAPPACTIVATED
-            || wParam == HSHELL_RUDEAPPACTIVATED
-#endif
-            || wParam == HSHELL_LANGUAGE) {
-            UpdateIconIfChanged(QueryForegroundLang());
-        }
-        return 0;
-    }
-
     switch (msg)
     {
     case WM_CREATE:
         g_hWnd = hWnd;
+        // Периодический опрос
+        SetTimer(hWnd, TIMER_ID, TIMER_INTERVAL, nullptr);
 
-        // Shell hook: смена фокуса/редкие события смены языка
-        RegisterShellHookWindow(hWnd);
-
-        // Низкоуровневый хук клавиатуры: ловим горячие клавиши смены раскладки
-        g_hHookLL = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandleW(nullptr), 0);
-
-        // Стартовая иконка
-        UpdateIconIfChanged(QueryForegroundLang());
+        UpdateIconIfChanged(QueryForegroundLang()); // стартовая иконка
         TrayAddOrUpdate(TRUE);
         return 0;
 
-    case WM_INPUTLANGCHANGE:
-        // Обычно мы это не получим (сообщение идёт активному окну), но на всякий случай:
-        UpdateIconIfChanged((LANGID)(UINT_PTR)lParam);
-        return 0;
-
     case WM_TIMER:
-        if (wParam == TIMER_DEBOUNCE_ID) {
-            KillTimer(hWnd, TIMER_DEBOUNCE_ID);
-            g_pendingUpdate = FALSE;
+        if (wParam == TIMER_ID) {
             UpdateIconIfChanged(QueryForegroundLang());
         }
         return 0;
@@ -378,7 +291,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return 0;
 
     case WM_DESTROY:
-        if (g_hHookLL) { UnhookWindowsHookEx(g_hHookLL); g_hHookLL = nullptr; }
+        KillTimer(hWnd, TIMER_ID);
         TrayDelete();
         if (g_hIconCurrent) { DestroyIcon(g_hIconCurrent); g_hIconCurrent = nullptr; }
         PostQuitMessage(0);
@@ -392,7 +305,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
     g_hInst = hInstance;
     GetExeDir();
     WM_TASKBARCREATED = RegisterWindowMessageW(L"TaskbarCreated");
-    WM_SHELLHOOK      = RegisterWindowMessageW(L"SHELLHOOK");
 
     WNDCLASSEXW wc = {0};
     wc.cbSize = sizeof(wc);
