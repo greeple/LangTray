@@ -30,26 +30,44 @@ jobs:
         with:
           arch: ${{ matrix.arch }}
 
-      - name: Build (MSVC ${{ matrix.arch }}) - size-optimized
+      - name: Build (MSVC ${{ matrix.arch }}) - size-optimized with CRT-less entry (fallback to normal)
         shell: pwsh
         run: |
-          # Максимально ужимаем MSVC:
-          #  - /O1            минимизировать размер
-          #  - /GL            Whole Program Optimization (требует /LTCG на линковке)
-          #  - /Gy /Gw        function-level + global data optimization
-          #  - /GF            string pooling
-          #  - /GR-           без RTTI
-          #  - /GS-           без security cookies (минимальный размер; см. trade-off)
-          #  - /utf-8         исходник в UTF-8
-          #  Линкер:
-          #  - /LTCG          link-time code generation
-          #  - /OPT:REF,ICF   выкинуть неиспользуемое, схлопнуть одинаковые
-          #  - /INCREMENTAL:NO
-          #
-          # Примечание: используем /MD (CRT динамически) — так меньше размер EXE.
-          $CL   = '/nologo /O1 /GL /Gy /Gw /GF /GR- /GS- /utf-8 /DUNICODE /D_UNICODE'
-          $LINK = '/SUBSYSTEM:WINDOWS /LTCG /OPT:REF,ICF /INCREMENTAL:NO user32.lib shell32.lib gdi32.lib advapi32.lib'
-          cmd /c "cl $CL LangTray.cpp /link $LINK"
+          # Попытка №1: максимальное ужатие без CRT-стартапа
+          #  - /DMIN_CRT_STARTUP     включает наш кастомный entrypoint из исходника (см. ниже)
+          #  - /O1 /Os /Oi           минимум размера + intrinsics
+          #  - /GL + /LTCG           оптимизация на этапе линковки
+          #  - /Gy /Gw /GF           вынос функций/данных, пул строк
+          #  - /GR- /GS-             без RTTI/секьюрити‑cookie (экономия размеров)
+          #  - /NODEFAULTLIB         не притягивать CRT
+          #  - /MANIFEST:NO          без манифеста (ещё -1..2 КБ), можно убрать если нужен
+          #  - Только системные либы: kernel32/user32/shell32/gdi32/advapi32
+          $cmd1 = @'
+          cl /nologo /O1 /Os /Oi /GL /Gy /Gw /GF /GR- /GS- /utf-8 ^
+             /DUNICODE /D_UNICODE /DMIN_CRT_STARTUP ^
+             LangTray.cpp ^
+             /link /SUBSYSTEM:WINDOWS /LTCG /OPT:REF,ICF /INCREMENTAL:NO /MANIFEST:NO /NODEFAULTLIB ^
+             kernel32.lib user32.lib shell32.lib gdi32.lib advapi32.lib
+          '@
+
+          # Попытка №2 (fallback): обычный CRT-стартап, но всё равно максимально ужато
+          $cmd2 = @'
+          cl /nologo /O1 /Os /Oi /GL /Gy /Gw /GF /GR- /GS- /utf-8 ^
+             /DUNICODE /D_UNICODE ^
+             LangTray.cpp ^
+             /link /SUBSYSTEM:WINDOWS /LTCG /OPT:REF,ICF /INCREMENTAL:NO /MANIFEST:NO ^
+             user32.lib shell32.lib gdi32.lib advapi32.lib
+          '@
+
+          Write-Host "Build attempt #1 (CRT-less entry)"; cmd /c $cmd1
+          if (-not (Test-Path .\LangTray.exe)) {
+            Write-Warning "CRT-less build failed. Falling back to normal CRT build..."
+            cmd /c $cmd2
+          }
+
+          if (-not (Test-Path .\LangTray.exe)) {
+            throw "MSVC build failed"
+          }
 
       - name: Package ZIP (MSVC ${{ matrix.arch }})
         shell: pwsh
@@ -96,7 +114,6 @@ jobs:
       - name: Build (${{ matrix.msystem }})
         shell: msys2 {0}
         run: |
-          # Самодостаточный exe без libgcc_s*.dll и libstdc++*.dll
           g++ -O2 -s -municode -mwindows -finput-charset=UTF-8 \
              -static-libgcc -static-libstdc++ \
              LangTray.cpp -o LangTray.exe -luser32 -lshell32 -lgdi32 -ladvapi32
