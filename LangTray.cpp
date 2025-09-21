@@ -5,7 +5,7 @@
 // Сборка (MSVC):
 //   cl /nologo /O2 /utf-8 LangTray.cpp /DUNICODE /D_UNICODE /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib gdi32.lib advapi32.lib
 // Сборка (MinGW):
-//   g++ -O2 -municode -mwindows -finput-charset=UTF-8 LangTray.cpp -o LangTray.exe -luser32 -lshell32 -lgdi32 -ladvapi32
+//   g++ -O2 -s -municode -mwindows -finput-charset=UTF-8 -static-libgcc -static-libstdc++ LangTray.cpp -o LangTray.exe -luser32 -lshell32 -lgdi32 -ladvapi32
 
 #define UNICODE
 #define _UNICODE
