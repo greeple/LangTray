@@ -1,10 +1,18 @@
 name: Build LangTray
 
+permissions:
+  contents: write
+
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.0.0)'
+        required: true
+        type: string
 
 jobs:
   msvc:
@@ -22,27 +30,43 @@ jobs:
         with:
           arch: ${{ matrix.arch }}
 
-      - name: Build (MSVC ${{ matrix.arch }})
+      - name: Build (MSVC ${{ matrix.arch }}) - size-optimized
         shell: pwsh
         run: |
-          cl /nologo /O2 /utf-8 LangTray.cpp /DUNICODE /D_UNICODE /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib gdi32.lib advapi32.lib
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Move-Item LangTray.exe "dist/LangTray-msvc-${{ matrix.arch }}.exe"
+          # Максимально ужимаем MSVC:
+          #  - /O1            минимизировать размер
+          #  - /GL            Whole Program Optimization (требует /LTCG на линковке)
+          #  - /Gy /Gw        function-level + global data optimization
+          #  - /GF            string pooling
+          #  - /GR-           без RTTI
+          #  - /GS-           без security cookies (минимальный размер; см. trade-off)
+          #  - /utf-8         исходник в UTF-8
+          #  Линкер:
+          #  - /LTCG          link-time code generation
+          #  - /OPT:REF,ICF   выкинуть неиспользуемое, схлопнуть одинаковые
+          #  - /INCREMENTAL:NO
+          #
+          # Примечание: используем /MD (CRT динамически) — так меньше размер EXE.
+          $CL   = '/nologo /O1 /GL /Gy /Gw /GF /GR- /GS- /utf-8 /DUNICODE /D_UNICODE'
+          $LINK = '/SUBSYSTEM:WINDOWS /LTCG /OPT:REF,ICF /INCREMENTAL:NO user32.lib shell32.lib gdi32.lib advapi32.lib'
+          cmd /c "cl $CL LangTray.cpp /link $LINK"
 
-      - name: Prepare artifact folder (MSVC ${{ matrix.arch }})
+      - name: Package ZIP (MSVC ${{ matrix.arch }})
         shell: pwsh
         run: |
           $name = "LangTray-msvc-${{ matrix.arch }}"
-          $out  = "package/$name"
-          New-Item -ItemType Directory -Force -Path $out | Out-Null
-          Copy-Item "dist/$name.exe" "$out/LangTray.exe"
-          if (Test-Path "icons") { Copy-Item -Recurse -Force "icons" "$out/icons" }
+          $pkg  = "out/$name"
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          Copy-Item "LangTray.exe" "$pkg/LangTray.exe"
+          if (Test-Path "icons") { Copy-Item -Recurse -Force "icons" "$pkg/icons" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Force -CompressionLevel Optimal -Path "$pkg/*" -DestinationPath "dist/$name.zip"
 
-      - name: Upload artifact (folder) (MSVC ${{ matrix.arch }})
+      - name: Upload artifact ZIP (MSVC ${{ matrix.arch }})
         uses: actions/upload-artifact@v4
         with:
-          name: LangTray-msvc-${{ matrix.arch }}
-          path: package/LangTray-msvc-${{ matrix.arch }}
+          name: LangTray-msvc-${{ matrix.arch }}.zip
+          path: dist/LangTray-msvc-${{ matrix.arch }}.zip
 
   mingw:
     name: MinGW ${{ matrix.msystem }}
@@ -53,12 +77,10 @@ jobs:
         include:
           - msystem: MINGW64
             pkg: mingw-w64-x86_64-toolchain
-            exe: LangTray-mingw64.exe
-            art: LangTray-mingw64
+            zip: LangTray-mingw64.zip
           - msystem: MINGW32
             pkg: mingw-w64-i686-toolchain
-            exe: LangTray-mingw32.exe
-            art: LangTray-mingw32
+            zip: LangTray-mingw32.zip
 
     steps:
       - name: Checkout
@@ -78,50 +100,54 @@ jobs:
           g++ -O2 -s -municode -mwindows -finput-charset=UTF-8 \
              -static-libgcc -static-libstdc++ \
              LangTray.cpp -o LangTray.exe -luser32 -lshell32 -lgdi32 -ladvapi32
-          mkdir -p dist
-          mv LangTray.exe "dist/${{ matrix.exe }}"
 
-      - name: Prepare artifact folder (${{ matrix.msystem }})
+      - name: Package ZIP (${{ matrix.msystem }})
         shell: pwsh
         run: |
-          $name = "${{ matrix.art }}"
-          $out  = "out/$name"
-          New-Item -ItemType Directory -Force -Path $out | Out-Null
-          Copy-Item "dist/${{ matrix.exe }}" "$out/LangTray.exe"
-          if (Test-Path "icons") { Copy-Item -Recurse -Force "icons" "$out/icons" }
+          $name = "${{ matrix.zip }}".Replace(".zip","")
+          $pkg  = "out/$name"
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          Copy-Item "LangTray.exe" "$pkg/LangTray.exe"
+          if (Test-Path "icons") { Copy-Item -Recurse -Force "icons" "$pkg/icons" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Force -CompressionLevel Optimal -Path "$pkg/*" -DestinationPath "dist/${{ matrix.zip }}"
 
-      - name: Upload artifact (folder) (${{ matrix.msystem }})
+      - name: Upload artifact ZIP (${{ matrix.msystem }})
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.art }}
-          path: out/${{ matrix.art }}
+          name: ${{ matrix.zip }}
+          path: dist/${{ matrix.zip }}
 
   release:
     name: Release
     runs-on: ubuntu-latest
     needs: [msvc, mingw]
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Download all artifacts (as folders)
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "value=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download artifacts (ZIPs)
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
-          merge-multiple: false
+          path: dist
+          pattern: '*.zip'
+          merge-multiple: true
 
-      - name: Zip all targets
-        run: |
-          sudo apt-get update && sudo apt-get install -y zip
-          mkdir -p dist
-          for d in artifacts/*; do
-            [ -d "$d" ] || continue
-            name="$(basename "$d")"
-            (cd "$d" && zip -r9 "../../dist/${name}.zip" .)
-          done
-
-      - name: Create GitHub Release
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/*.zip
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: LangTray ${{ steps.tag.outputs.value }}
+          files: dist/*.zip
+          overwrite_files: true
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
