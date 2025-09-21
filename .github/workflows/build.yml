@@ -25,36 +25,24 @@ jobs:
       - name: Build (MSVC ${{ matrix.arch }})
         shell: pwsh
         run: |
-          # Собираем GUI-приложение, источник — UTF-8
           cl /nologo /O2 /utf-8 LangTray.cpp /DUNICODE /D_UNICODE /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib gdi32.lib advapi32.lib
-
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Move-Item LangTray.exe "dist/LangTray-msvc-${{ matrix.arch }}.exe"
 
-      - name: Package ZIP (MSVC ${{ matrix.arch }})
+      - name: Prepare artifact folder (MSVC ${{ matrix.arch }})
         shell: pwsh
         run: |
-          $pkgName = "LangTray-msvc-${{ matrix.arch }}"
-          $pkgDir  = "package/$pkgName"
-          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+          $name = "LangTray-msvc-${{ matrix.arch }}"
+          $out  = "package/$name"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item "dist/$name.exe" "$out/LangTray.exe"
+          if (Test-Path "icons") { Copy-Item -Recurse -Force "icons" "$out/icons" }
 
-          # В ZIP кладём файл с именем LangTray.exe
-          Copy-Item "dist/$pkgName.exe" "$pkgDir/LangTray.exe"
-
-          if (Test-Path "icons") {
-            Copy-Item -Recurse -Force "icons" "$pkgDir/icons"
-          } else {
-            Write-Host "icons/ не найдена — в ZIP попадёт только LangTray.exe"
-          }
-
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Force -CompressionLevel Optimal -Path "$pkgDir/*" -DestinationPath "dist/$pkgName.zip"
-
-      - name: Upload ZIP artifact (MSVC ${{ matrix.arch }})
+      - name: Upload artifact (folder) (MSVC ${{ matrix.arch }})
         uses: actions/upload-artifact@v4
         with:
-          name: LangTray-msvc-${{ matrix.arch }}-zip
-          path: dist/LangTray-msvc-${{ matrix.arch }}.zip
+          name: LangTray-msvc-${{ matrix.arch }}
+          path: package/LangTray-msvc-${{ matrix.arch }}
 
   mingw:
     name: MinGW ${{ matrix.msystem }}
@@ -66,11 +54,11 @@ jobs:
           - msystem: MINGW64
             pkg: mingw-w64-x86_64-toolchain
             exe: LangTray-mingw64.exe
-            zip: LangTray-mingw64.zip
+            art: LangTray-mingw64
           - msystem: MINGW32
             pkg: mingw-w64-i686-toolchain
             exe: LangTray-mingw32.exe
-            zip: LangTray-mingw32.zip
+            art: LangTray-mingw32
 
     steps:
       - name: Checkout
@@ -86,35 +74,24 @@ jobs:
       - name: Build (${{ matrix.msystem }})
         shell: msys2 {0}
         run: |
-          # GUI-подсистема (-mwindows), источник в UTF-8, Unicode-entrpoint
           g++ -O2 -municode -mwindows -finput-charset=UTF-8 LangTray.cpp -o ${{ matrix.exe }} -luser32 -lshell32 -lgdi32 -ladvapi32
           mkdir -p dist
           mv ${{ matrix.exe }} dist/
 
-      - name: Package ZIP (${{ matrix.msystem }})
+      - name: Prepare artifact folder (${{ matrix.msystem }})
         shell: pwsh
         run: |
-          $pkgName = "${{ matrix.zip }}".Replace(".zip","")
-          $pkgDir  = "package/$pkgName"
-          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+          $name = "${{ matrix.art }}"
+          $out  = "package/$name"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item "dist/${{ matrix.exe }}" "$out/LangTray.exe"
+          if (Test-Path "icons") { Copy-Item -Recurse -Force "icons" "$out/icons" }
 
-          # В ZIP кладём файл с именем LangTray.exe
-          Copy-Item "dist/${{ matrix.exe }}" "$pkgDir/LangTray.exe"
-
-          if (Test-Path "icons") {
-            Copy-Item -Recurse -Force "icons" "$pkgDir/icons"
-          } else {
-            Write-Host "icons/ не найдена — в ZIP попадёт только LangTray.exe"
-          }
-
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Force -CompressionLevel Optimal -Path "$pkgDir/*" -DestinationPath "dist/${{ matrix.zip }}"
-
-      - name: Upload ZIP artifact (${{ matrix.msystem }})
+      - name: Upload artifact (folder) (${{ matrix.msystem }})
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.zip }}
-          path: dist/${{ matrix.zip }}
+          name: ${{ matrix.art }}
+          path: package/${{ matrix.art }}
 
   release:
     name: Release
@@ -122,12 +99,21 @@ jobs:
     needs: [msvc, mingw]
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Download all artifacts
+      - name: Download all artifacts (as folders)
         uses: actions/download-artifact@v4
         with:
-          path: dist
-          pattern: '*'
-          merge-multiple: true
+          path: artifacts
+          merge-multiple: false
+
+      - name: Zip all targets
+        run: |
+          sudo apt-get update && sudo apt-get install -y zip
+          mkdir -p dist
+          for d in artifacts/*; do
+            [ -d "$d" ] || continue
+            name="$(basename "$d")"
+            (cd "$d" && zip -r9 "../../dist/${name}.zip" .)
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
