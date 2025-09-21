@@ -327,3 +327,19 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
     }
     return (int)msg.wParam;
 }
+// Включается флагом компиляции /DMIN_CRT_STARTUP (см. workflow)
+#ifdef MIN_CRT_STARTUP
+extern "C" void WINAPI EntryPoint(void);
+int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int);
+#pragma comment(linker, "/ENTRY:EntryPoint")
+extern "C" void WINAPI EntryPoint(void)
+{
+    HINSTANCE hInst = GetModuleHandleW(nullptr);
+    int nCmdShow = SW_SHOWDEFAULT;
+    STARTUPINFOW si; si.cb = sizeof(si);
+    GetStartupInfoW(&si);
+    if (si.dwFlags & STARTF_USESHOWWINDOW) nCmdShow = si.wShowWindow;
+    int rc = wWinMain(hInst, nullptr, GetCommandLineW(), nCmdShow);
+    ExitProcess((UINT)rc);
+}
+#endif
