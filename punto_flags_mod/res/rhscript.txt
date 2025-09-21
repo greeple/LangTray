@@ -1,0 +1,12 @@
+[FILENAMES]
+Exe = ".\punto.exe"
+SaveAs = ".\punto.exe"
+Log = ".\res\errors.log"
+
+[COMMANDS]
+-modify "flags\1033.ico", ICONGROUP, "1033",
+-modify "flags\1033_D.ico", ICONGROUP, "1033_D",
+-modify "flags\1049.ico", ICONGROUP, "1049",
+-modify "flags\1049_D.ico", ICONGROUP, "1049_D",
+-modify "flags\1058.ico", ICONGROUP, "1058",
+-modify "flags\1058_D.ico", ICONGROUP, "1058_D",
