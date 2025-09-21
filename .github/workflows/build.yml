@@ -25,7 +25,9 @@ jobs:
       - name: Build (MSVC ${{ matrix.arch }})
         shell: pwsh
         run: |
-          cl /nologo /O2 LangTray.cpp /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib gdi32.lib advapi32.lib
+          # Собираем GUI-приложение, источник — UTF-8
+          cl /nologo /O2 /utf-8 LangTray.cpp /DUNICODE /D_UNICODE /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib gdi32.lib advapi32.lib
+
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Move-Item LangTray.exe "dist/LangTray-msvc-${{ matrix.arch }}.exe"
 
@@ -35,12 +37,14 @@ jobs:
           $pkgName = "LangTray-msvc-${{ matrix.arch }}"
           $pkgDir  = "package/$pkgName"
           New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
-          Copy-Item "dist/$pkgName.exe" $pkgDir/
+
+          # В ZIP кладём файл с именем LangTray.exe
+          Copy-Item "dist/$pkgName.exe" "$pkgDir/LangTray.exe"
 
           if (Test-Path "icons") {
-            Copy-Item -Recurse -Force "icons" "$pkgDir/"
+            Copy-Item -Recurse -Force "icons" "$pkgDir/icons"
           } else {
-            Write-Host "icons/ не найдена — в ZIP попадёт только .exe"
+            Write-Host "icons/ не найдена — в ZIP попадёт только LangTray.exe"
           }
 
           New-Item -ItemType Directory -Force -Path dist | Out-Null
@@ -82,7 +86,8 @@ jobs:
       - name: Build (${{ matrix.msystem }})
         shell: msys2 {0}
         run: |
-          g++ -O2 -municode LangTray.cpp -o ${{ matrix.exe }} -luser32 -lshell32 -lgdi32 -ladvapi32
+          # GUI-подсистема (-mwindows), источник в UTF-8, Unicode-entrpoint
+          g++ -O2 -municode -mwindows -finput-charset=UTF-8 LangTray.cpp -o ${{ matrix.exe }} -luser32 -lshell32 -lgdi32 -ladvapi32
           mkdir -p dist
           mv ${{ matrix.exe }} dist/
 
@@ -92,12 +97,14 @@ jobs:
           $pkgName = "${{ matrix.zip }}".Replace(".zip","")
           $pkgDir  = "package/$pkgName"
           New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
-          Copy-Item "dist/${{ matrix.exe }}" $pkgDir/
+
+          # В ZIP кладём файл с именем LangTray.exe
+          Copy-Item "dist/${{ matrix.exe }}" "$pkgDir/LangTray.exe"
 
           if (Test-Path "icons") {
-            Copy-Item -Recurse -Force "icons" "$pkgDir/"
+            Copy-Item -Recurse -Force "icons" "$pkgDir/icons"
           } else {
-            Write-Host "icons/ не найдена — в ZIP попадёт только .exe"
+            Write-Host "icons/ не найдена — в ZIP попадёт только LangTray.exe"
           }
 
           New-Item -ItemType Directory -Force -Path dist | Out-Null
