@@ -9,7 +9,7 @@ on:
 jobs:
   msvc:
     name: MSVC ${{ matrix.arch }}
-    runs-on: windows-latest
+    runs-on: windows-2022
     strategy:
       matrix:
         arch: [x64, x86]
@@ -46,7 +46,7 @@ jobs:
 
   mingw:
     name: MinGW ${{ matrix.msystem }}
-    runs-on: windows-latest
+    runs-on: windows-2022
     strategy:
       matrix:
         msystem: [MINGW64, MINGW32]
