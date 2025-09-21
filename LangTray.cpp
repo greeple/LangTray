@@ -6,8 +6,6 @@
 //   cl /nologo /O2 /utf-8 LangTray.cpp /DUNICODE /D_UNICODE /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib gdi32.lib advapi32.lib
 // Сборка (MinGW):
 //   g++ -O2 -municode -mwindows -finput-charset=UTF-8 LangTray.cpp -o LangTray.exe -luser32 -lshell32 -lgdi32 -ladvapi32
-//
-// Иконки: .\icons\*.ico (см. правила в LoadIconForLang)
 
 #define UNICODE
 #define _UNICODE
@@ -42,6 +40,9 @@ LANGID    g_lastLang = 0;
 HWND      g_hWnd = nullptr;
 WCHAR     g_exeDir[MAX_PATH] = {0};
 WCHAR     g_iconsDir[MAX_PATH] = {0};
+WCHAR     g_flagsDir[MAX_PATH] = {0};
+BOOL      g_hasIconsDir = FALSE;
+BOOL      g_hasFlagsDir = FALSE;
 UINT      WM_TASKBARCREATED = 0;
 UINT      WM_SHELLHOOK = 0;
 
@@ -49,6 +50,11 @@ static BOOL FileExistsW_(LPCWSTR path)
 {
     DWORD attr = GetFileAttributesW(path);
     return (attr != INVALID_FILE_ATTRIBUTES) && !(attr & FILE_ATTRIBUTE_DIRECTORY);
+}
+static BOOL DirExistsW_(LPCWSTR path)
+{
+    DWORD attr = GetFileAttributesW(path);
+    return (attr != INVALID_FILE_ATTRIBUTES) && (attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
 static void GetExeDir()
@@ -65,6 +71,9 @@ static void GetExeDir()
         lstrcpyW(g_exeDir, L".");
     }
     wsprintfW(g_iconsDir, L"%s\\icons", g_exeDir);
+    wsprintfW(g_flagsDir, L"%s\\flags", g_exeDir);
+    g_hasIconsDir = DirExistsW_(g_iconsDir);
+    g_hasFlagsDir = DirExistsW_(g_flagsDir);
 }
 
 static void ToHex4(WCHAR out[5], WORD v)
@@ -103,37 +112,81 @@ static HICON LoadIconFromFile(LPCWSTR path)
     return (HICON)LoadImageW(nullptr, path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
 }
 
-// Выбирает .ico по языку. Порядок приоритетов:
-//   icons\<lang>-<country>.ico (en-US.ico)
-//   icons\<lang>_<country>.ico (en_US.ico)
-//   icons\<lang>.ico (en.ico)
-//   icons\<LANGID-hex>.ico (0409.ico)
-//   icons\default.ico
-static HICON LoadIconForLang(LANGID lang)
+static HICON TryLoadInDir(LPCWSTR dir, LPCWSTR leaf)
 {
-    WCHAR isoLang[16], isoCtry[16];
-    GetIsoCodesFromLangId(lang, isoLang, isoCtry);
-
-    WCHAR candidates[6][MAX_PATH];
-    int idx = 0;
-
-    if (isoLang[0] && isoCtry[0]) {
-        wsprintfW(candidates[idx++], L"%s\\%s-%s.ico", g_iconsDir, isoLang, isoCtry);
-        wsprintfW(candidates[idx++], L"%s\\%s_%s.ico", g_iconsDir, isoLang, isoCtry);
+    if (!dir || !dir[0]) return nullptr;
+    WCHAR path[MAX_PATH];
+    wsprintfW(path, L"%s\\%s", dir, leaf);
+    if (FileExistsW_(path)) {
+        HICON h = LoadIconFromFile(path);
+        if (h) return h;
     }
-    if (isoLang[0]) {
-        wsprintfW(candidates[idx++], L"%s\\%s.ico", g_iconsDir, isoLang);
-    }
-    WCHAR hex4[5]; ToHex4(hex4, lang);
-    wsprintfW(candidates[idx++], L"%s\\%s.ico", g_iconsDir, hex4);
-    wsprintfW(candidates[idx++], L"%s\\default.ico", g_iconsDir);
+    return nullptr;
+}
 
-    for (int i = 0; i < idx; ++i) {
-        if (FileExistsW_(candidates[i])) {
-            HICON h = LoadIconFromFile(candidates[i]);
-            if (h) return h;
+// Пытаемся найти иконку по списку "листов" (имён файлов без директории)
+// сначала в icons\, затем в flags\, затем default из этих же папок.
+static HICON TryLoadByLeafs(LPCWSTR leafs[], int count)
+{
+    for (int i = 0; i < count; ++i) {
+        if (g_hasIconsDir) {
+            if (HICON h = TryLoadInDir(g_iconsDir, leafs[i])) return h;
+        }
+        if (g_hasFlagsDir) {
+            if (HICON h = TryLoadInDir(g_flagsDir, leafs[i])) return h;
         }
     }
+    return nullptr;
+}
+
+// Выбираем .ico для языка.
+// Приоритет (на 1033 пример):
+//  - 1033.ico
+//  - 1033_D.ico
+//  - en-US.ico, en_US.ico, en.ico
+//  - 0409.ico (hex)
+//  - default.ico
+static HICON LoadIconForLang(LANGID lang)
+{
+    WCHAR dec[16]; wsprintfW(dec, L"%u", (UINT)lang);
+    WCHAR isoLang[16] = L"", isoCtry[16] = L"";
+    GetIsoCodesFromLangId(lang, isoLang, isoCtry);
+    WCHAR hex4[5]; ToHex4(hex4, lang);
+
+    // Формируем набор "листов" (имён файлов)
+    // Порядок важен.
+    LPCWSTR leafs[12];
+    int n = 0;
+
+    // Десятичные имена (совместимость с паком Punto)
+    WCHAR decIco[32];     wsprintfW(decIco,     L"%s.ico", dec);
+    WCHAR decDIco[32];    wsprintfW(decDIco,    L"%s_D.ico", dec);
+    leafs[n++] = decIco;
+    leafs[n++] = decDIco;
+
+    // ISO (как запасной вариант)
+    WCHAR isoDash[64] = L"", isoUnd[64] = L"", isoOnly[32] = L"";
+    if (isoLang[0] && isoCtry[0]) {
+        wsprintfW(isoDash, L"%s-%s.ico", isoLang, isoCtry); // en-US.ico
+        wsprintfW(isoUnd,  L"%s_%s.ico", isoLang, isoCtry); // en_US.ico
+        leafs[n++] = isoDash;
+        leafs[n++] = isoUnd;
+    }
+    if (isoLang[0]) {
+        wsprintfW(isoOnly, L"%s.ico", isoLang);             // en.ico
+        leafs[n++] = isoOnly;
+    }
+
+    // Hex (как ещё один запасной вариант)
+    WCHAR hexIco[32]; wsprintfW(hexIco, L"%s.ico", hex4);  // 0409.ico
+    leafs[n++] = hexIco;
+
+    // Default
+    leafs[n++] = L"default.ico";
+
+    if (HICON h = TryLoadByLeafs(leafs, n)) return h;
+
+    // Совсем запасной вариант — системная иконка
     return (HICON)LoadIconW(nullptr, IDI_APPLICATION);
 }
 
@@ -212,7 +265,6 @@ static void ShowTrayMenu()
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
 
-    // Если кириллица отображается неверно — см. комментарии вверху (UTF-8 + /utf-8).
     AppendMenuW(menu, MF_STRING, IDM_OPEN_ICONS, L"Открыть папку с иконками");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, IDM_EXIT, L"Выход");
@@ -225,20 +277,24 @@ static void ShowTrayMenu()
 
 static void OpenIconsFolder()
 {
-    ShellExecuteW(nullptr, L"open", g_iconsDir, nullptr, nullptr, SW_SHOWNORMAL);
+    // Откроем icons\ если есть, иначе flags\, иначе папку с exe
+    if (g_hasIconsDir) {
+        ShellExecuteW(nullptr, L"open", g_iconsDir, nullptr, nullptr, SW_SHOWNORMAL);
+    } else if (g_hasFlagsDir) {
+        ShellExecuteW(nullptr, L"open", g_flagsDir, nullptr, nullptr, SW_SHOWNORMAL);
+    } else {
+        ShellExecuteW(nullptr, L"open", g_exeDir, nullptr, nullptr, SW_SHOWNORMAL);
+    }
 }
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    // Explorer перезапущен — заново добавить иконку
     if (msg == WM_TASKBARCREATED) {
         TrayAddOrUpdate(TRUE);
         return 0;
     }
 
-    // Обработка shell hook сообщений (мгновенная реакция)
     if (msg == WM_SHELLHOOK) {
-        // Изменение языка или активация окна — обновим иконку
         if (wParam == HSHELL_LANGUAGE || wParam == HSHELL_WINDOWACTIVATED
 #ifdef HSHELL_RUDEAPPACTIVATED
             || wParam == HSHELL_RUDEAPPACTIVATED
@@ -254,20 +310,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
     case WM_CREATE:
         g_hWnd = hWnd;
-
-        // Регистрируем окно как получатель shell hook
         RegisterShellHookWindow(hWnd);
-
-        // Резервный таймер (на случай если hook не сработал)
         SetTimer(hWnd, TIMER_ID, TIMER_INTERVAL, nullptr);
-
-        // Начальная иконка по текущей раскладке
         UpdateIconIfChanged(QueryForegroundLang());
         TrayAddOrUpdate(TRUE);
         return 0;
 
     case WM_INPUTLANGCHANGE:
-        // lParam = HKL, LOWORD -> LANGID
         UpdateIconIfChanged((LANGID)(UINT_PTR)lParam);
         return 0;
 
@@ -331,7 +380,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
                                 nullptr, nullptr, hInstance, nullptr);
     if (!hWnd) return 0;
 
-    // Скрытое окно — просто цикл сообщений
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         TranslateMessage(&msg);
