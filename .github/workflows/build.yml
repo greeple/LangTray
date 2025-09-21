@@ -74,9 +74,7 @@ jobs:
       - name: Build (${{ matrix.msystem }})
         shell: msys2 {0}
         run: |
-          g++ -O2 -municode -mwindows -finput-charset=UTF-8 LangTray.cpp -o ${{ matrix.exe }} -luser32 -lshell32 -lgdi32 -ladvapi32
-          mkdir -p dist
-          mv ${{ matrix.exe }} dist/
+          g++ -O2 -s -municode -mwindows -finput-charset=UTF-8 -static-libgcc -static-libstdc++ LangTray.cpp -o LangTray.exe -luser32 -lshell32 -lgdi32 -ladvapi32
 
       - name: Prepare artifact folder (${{ matrix.msystem }})
         shell: pwsh
