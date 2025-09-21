@@ -1,0 +1,97 @@
+name: Build LangTray
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  msvc:
+    name: MSVC ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [x64, x86]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC dev cmd
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+
+      - name: Build (MSVC ${{ matrix.arch }})
+        shell: pwsh
+        run: |
+          # Компиляция (GUI-подсистема)
+          cl /nologo /O2 LangTray.cpp /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib gdi32.lib advapi32.lib
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Move-Item LangTray.exe "dist/LangTray-msvc-${{ matrix.arch }}.exe"
+
+      - name: Upload artifact (MSVC ${{ matrix.arch }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: LangTray-msvc-${{ matrix.arch }}
+          path: dist/LangTray-msvc-${{ matrix.arch }}.exe
+
+  mingw:
+    name: MinGW ${{ matrix.msystem }}
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        msystem: [MINGW64, MINGW32]
+        include:
+          - msystem: MINGW64
+            pkg: mingw-w64-x86_64-toolchain
+            exe: LangTray-mingw64.exe
+          - msystem: MINGW32
+            pkg: mingw-w64-i686-toolchain
+            exe: LangTray-mingw32.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2 (${{ matrix.msystem }})
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          install: ${{ matrix.pkg }}
+          update: true
+
+      - name: Build (${{ matrix.msystem }})
+        shell: msys2 {0}
+        run: |
+          g++ -O2 -municode LangTray.cpp -o ${{ matrix.exe }} -luser32 -lshell32 -lgdi32 -ladvapi32
+          mkdir -p dist
+          mv ${{ matrix.exe }} dist/
+
+      - name: Upload artifact (${{ matrix.msystem }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: LangTray-${{ matrix.msystem }}
+          path: dist/${{ matrix.exe }}
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs: [msvc, mingw]
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: '*'
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
