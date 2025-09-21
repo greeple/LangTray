@@ -173,21 +173,16 @@ static void TrayAddOrUpdate(BOOL add)
     nid.cbSize = GetNidCbSize();
     nid.hWnd = g_hWnd;
     nid.uID = TRAY_ICON_ID;
-    nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    nid.uFlags = NIF_MESSAGE | NIF_ICON; // без NIF_TIP — подсказки не будет
     nid.uCallbackMessage = WM_TRAYICON;
     nid.hIcon = g_hIconCurrent ? g_hIconCurrent : (HICON)LoadIconW(nullptr, IDI_APPLICATION);
-
-    WCHAR tip[128] = L"";
-    if (g_lastLang) GetEnglishNamesForTooltip(g_lastLang, tip);
-    if (!tip[0]) lstrcpyW(tip, L"Language tray");
-    lstrcpynW(nid.szTip, tip, ARRAYSIZE(nid.szTip));
 
     Shell_NotifyIconW(add ? NIM_ADD : NIM_MODIFY, &nid);
 
 #ifndef NOTIFYICON_VERSION_4
 #define NOTIFYICON_VERSION_4 4
 #endif
-    nid.uVersion = NOTIFYICON_VERSION; // совместимо с XP+
+    nid.uVersion = NOTIFYICON_VERSION;
     Shell_NotifyIconW(NIM_SETVERSION, &nid);
 }
 
