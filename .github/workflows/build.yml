@@ -46,7 +46,7 @@ jobs:
 
   mingw:
     name: MinGW ${{ matrix.msystem }}
-    runs-on: windows-2022
+    runs-on: windows-latest
     strategy:
       matrix:
         msystem: [MINGW64, MINGW32]
@@ -74,13 +74,18 @@ jobs:
       - name: Build (${{ matrix.msystem }})
         shell: msys2 {0}
         run: |
-          g++ -O2 -s -municode -mwindows -finput-charset=UTF-8 -static-libgcc -static-libstdc++ LangTray.cpp -o LangTray.exe -luser32 -lshell32 -lgdi32 -ladvapi32
+          # Самодостаточный exe без libgcc_s*.dll и libstdc++*.dll
+          g++ -O2 -s -municode -mwindows -finput-charset=UTF-8 \
+             -static-libgcc -static-libstdc++ \
+             LangTray.cpp -o LangTray.exe -luser32 -lshell32 -lgdi32 -ladvapi32
+          mkdir -p dist
+          mv LangTray.exe "dist/${{ matrix.exe }}"
 
       - name: Prepare artifact folder (${{ matrix.msystem }})
         shell: pwsh
         run: |
           $name = "${{ matrix.art }}"
-          $out  = "package/$name"
+          $out  = "out/$name"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           Copy-Item "dist/${{ matrix.exe }}" "$out/LangTray.exe"
           if (Test-Path "icons") { Copy-Item -Recurse -Force "icons" "$out/icons" }
@@ -89,7 +94,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.art }}
-          path: package/${{ matrix.art }}
+          path: out/${{ matrix.art }}
 
   release:
     name: Release
