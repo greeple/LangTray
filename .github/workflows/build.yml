@@ -30,37 +30,10 @@ jobs:
         with:
           arch: ${{ matrix.arch }}
 
-      - name: Build (MSVC ${{ matrix.arch }}) - size-optimized, CRT-less with fallback
+      - name: Build (MSVC ${{ matrix.arch }})
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-
-          # Попытка №1: минимальный старт без CRT
-          $args1 = @(
-            '/nologo','/O1','/Os','/Oi','/Gy','/Gw','/GF','/GR-','/GS-','/utf-8',
-            '/DUNICODE','/D_UNICODE','/DMIN_CRT_STARTUP',
-            'LangTray.cpp',
-            '/link','/SUBSYSTEM:WINDOWS','/OPT:REF,ICF','/INCREMENTAL:NO','/MANIFEST:NO','/NODEFAULTLIB',
-            'kernel32.lib','user32.lib','shell32.lib','gdi32.lib','advapi32.lib'
-          )
-          & cl @args1
-          $ok = ($LASTEXITCODE -eq 0) -and (Test-Path .\LangTray.exe)
-
-          if (-not $ok) {
-            Write-Warning "CRT-less build failed. Falling back to normal CRT build..."
-            Remove-Item -ErrorAction SilentlyContinue .\LangTray.exe
-
-            # Попытка №2: обычный стартап CRT, но с агрессивной оптимизацией
-            $args2 = @(
-              '/nologo','/O1','/Os','/Oi','/Gy','/Gw','/GF','/GR-','/GS-','/utf-8',
-              '/DUNICODE','/D_UNICODE',
-              'LangTray.cpp',
-              '/link','/SUBSYSTEM:WINDOWS','/LTCG','/OPT:REF,ICF','/INCREMENTAL:NO','/MANIFEST:NO',
-              'user32.lib','shell32.lib','gdi32.lib','advapi32.lib'
-            )
-            & cl @args2
-            if (-not (Test-Path .\LangTray.exe)) { throw "MSVC build failed" }
-          }
+          cl /nologo /O2 /utf-8 LangTray.cpp /DUNICODE /D_UNICODE /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib gdi32.lib advapi32.lib
 
       - name: Package ZIP (MSVC ${{ matrix.arch }})
         shell: pwsh
